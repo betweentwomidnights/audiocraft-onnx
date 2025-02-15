@@ -35,7 +35,8 @@ def generate_continuation(self, prompt: torch.Tensor, prompt_sample_rate: int,
         if return_tokens:
             return self.generate_audio(tokens), tokens
         return self.generate_audio(tokens)
-        ```
+      
+```
 
 our backend at https://github.com/betweentwomidnights/gary-backend-combined uses this function alot. It takes an input audio prompt. If we do figure this out, our applications won't need a backend in the clouds anymore.
 
