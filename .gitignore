@@ -60,3 +60,17 @@ dataset/*
 /notebooks
 /local_scripts
 /notes
+
+onnx_build_pattern.py
+onnx_inference_1.py
+onnx_inference_2.py
+onnx_lm_test_backup.py
+onnx_lm_test.py
+onnx_single_step_backup.py
+onnx_test.py
+
+state_dict.bin
+compression_state_dict.bin
+compression_encode.onnx
+compression_decode.onnx
+lm_inference.onnx

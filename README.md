@@ -1,92 +1,288 @@
-# AudioCraft
-![docs badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_docs/badge.svg)
-![linter badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_linter/badge.svg)
-![tests badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_tests/badge.svg)
+# audiocraft-onnx
 
-AudioCraft is a PyTorch library for deep learning research on audio generation. AudioCraft contains inference and training code
-for two state-of-the-art AI generative models producing high-quality audio: AudioGen and MusicGen.
+Me trying (and currently failing) to convert MusicGen weights to ONNX. This has all been done with the help of robot friends, and I'm definitely in over my head.
 
+## What's this all about?
 
-## Installation
-AudioCraft requires Python 3.9, PyTorch 2.1.0. To install AudioCraft, you can run the following:
+We're trying to convert Facebook's MusicGen model (specifically using weights from [thepatch/vanya_ai_dnb_0.1](https://huggingface.co/thepatch/vanya_ai_dnb_0.1), which is a fine-tune of facebook/musicgen-small) to ONNX format so we can run it in electron, or in phones locally. Transformers.js does have a musicgen version, but there's no 'generate_continuation' function. 
 
-```shell
-# Best to make sure you have torch installed first, in particular before installing xformers.
-# Don't run this if you already have PyTorch installed.
-python -m pip install 'torch==2.1.0'
-# You might need the following before trying to install the packages
-python -m pip install setuptools wheel
-# Then proceed to one of the following
-python -m pip install -U audiocraft  # stable release
-python -m pip install -U git+https://git@github.com/facebookresearch/audiocraft#egg=audiocraft  # bleeding edge
-python -m pip install -e .  # or if you cloned the repo locally (mandatory if you want to train).
-python -m pip install -e '.[wm]'  # if you want to train a watermarking model
+this is the function we be talkin about inside the /audiocraft/models/genmodel.py:
+
+def generate_continuation(self, prompt: torch.Tensor, prompt_sample_rate: int,
+                              descriptions: tp.Optional[tp.List[tp.Optional[str]]] = None,
+                              progress: bool = False, return_tokens: bool = False) \
+            -> tp.Union[torch.Tensor, tp.Tuple[torch.Tensor, torch.Tensor]]:
+        """Generate samples conditioned on audio prompts and an optional text description.
+
+        Args:
+            prompt (torch.Tensor): A batch of waveforms used for continuation.
+                Prompt should be [B, C, T], or [C, T] if only one sample is generated.
+            prompt_sample_rate (int): Sampling rate of the given audio waveforms.
+            descriptions (list of str, optional): A list of strings used as text conditioning. Defaults to None.
+            progress (bool, optional): Flag to display progress of the generation process. Defaults to False.
+        """
+        if prompt.dim() == 2:
+            prompt = prompt[None]
+        if prompt.dim() != 3:
+            raise ValueError("prompt should have 3 dimensions: [B, C, T] (C = 1).")
+        prompt = convert_audio(prompt, prompt_sample_rate, self.sample_rate, self.audio_channels)
+        if descriptions is None:
+            descriptions = [None] * len(prompt)
+        attributes, prompt_tokens = self._prepare_tokens_and_attributes(descriptions, prompt)
+        assert prompt_tokens is not None
+        tokens = self._generate_tokens(attributes, prompt_tokens, progress)
+        if return_tokens:
+            return self.generate_audio(tokens), tokens
+        return self.generate_audio(tokens)
+
+our backend at https://github.com/betweentwomidnights/gary-backend-combined uses this function alot. It takes an input audio prompt. If we do figure this out, our applications won't need a backend in the clouds anymore.
+
+The good news: encoding and decoding works.
+The bad news: The language model part is a hellscape.
+
+## Current Status
+
+### What's Working
+- The compression models (encode/decode) are successfully exported and working
+- We can encode and decode audio with the ONNX compression models
+- The LM model exports to ONNX without crashing, which was hard as f to do.
+
+### What's Not Working
+- The LM model inference is producing garbled insanity in actual use
+- We think this is because of the auto-regressive loop and how ONNX graphs work
+- The streaming transformer's stateful nature doesn't play nice with ONNX's static graph requirements
+
+## The Technical Details
+
+### Initial LM Test Output
+When we run our LM test, here's what we see:
+
+```
+Running test forward pass...
+Sequence mask:
+Shape: torch.Size([1, 4, 10])
+Dtype: torch.bool
+Values: 0.850 (mean)
+
+Sequence codes:
+Shape: torch.Size([1, 4, 14])
+Dtype: torch.int64
+Range: [0, 2048]
+Mean: 585.143
+Std: 933.565
+
+Initial logits:
+Shape: torch.Size([1, 4, 14, 2048])
+Dtype: torch.float32
+Range: [-11.006, 16.152]
+Mean: -1.047
+Std: 2.214
+
+Reshaped logits:
+Shape: torch.Size([1, 4, 10, 2048])
+Dtype: torch.float32
+Range: [-11.006, 15.101]
+Mean: -1.044
+Std: 2.178
+
+Final logits:
+Shape: torch.Size([1, 4, 2048])
+Dtype: torch.float32
+Range: [-9.624, 5.144]
+Mean: -1.047
+Std: 1.938
+
+Last step mask:
+Shape: torch.Size([1, 4, 2048])
+Dtype: torch.bool
+Values: 1.000 (mean)
+
+Masked logits:
+Shape: torch.Size([1, 4, 2048])
+Dtype: torch.float32
+Range: [-9.624, 5.144]
+Mean: -1.047
+Std: 1.938
 ```
 
-We also recommend having `ffmpeg` installed, either through your system or Anaconda:
-```bash
-sudo apt-get install ffmpeg
-# Or if you are using Anaconda or Miniconda
-conda install "ffmpeg<5" -c conda-forge
+### Compression Model Testing
+When we test the compression models, they work pretty well:
+
+```
+Prompt duration: 1 sec
+ - Codes shape: (1, 4, 50)
+ - Decoded audio shape: (1, 1, 32000)
+----------------------------------------
+Prompt duration: 5 sec
+ - Codes shape: (1, 4, 250)
+ - Decoded audio shape: (1, 1, 160000)
+----------------------------------------
+Prompt duration: 15 sec
+ - Codes shape: (1, 4, 750)
+ - Decoded audio shape: (1, 1, 480000)
 ```
 
-## Models
+### LM Model Comparison Results
 
-At the moment, AudioCraft contains the training code and inference code for:
-* [MusicGen](./docs/MUSICGEN.md): A state-of-the-art controllable text-to-music model.
-* [AudioGen](./docs/AUDIOGEN.md): A state-of-the-art text-to-sound model.
-* [EnCodec](./docs/ENCODEC.md): A state-of-the-art high fidelity neural audio codec.
-* [Multi Band Diffusion](./docs/MBD.md): An EnCodec compatible decoder using diffusion.
-* [MAGNeT](./docs/MAGNET.md): A state-of-the-art non-autoregressive model for text-to-music and text-to-sound.
-* [AudioSeal](./docs/WATERMARKING.md): A state-of-the-art audio watermarking.
-* [MusicGen Style](./docs/MUSICGEN_STYLE.md): A state-of-the-art text-and-style-to-music model.
-* [JASCO](./docs/JASCO.md): "High quality text-to-music model conditioned on chords, melodies and drum tracks"
+When we compare PyTorch vs ONNX implementations using check_logits.py:
 
-
-## Training code
-
-AudioCraft contains PyTorch components for deep learning research in audio and training pipelines for the developed models.
-For a general introduction of AudioCraft design principles and instructions to develop your own training pipeline, refer to
-the [AudioCraft training documentation](./docs/TRAINING.md).
-
-For reproducing existing work and using the developed training pipelines, refer to the instructions for each specific model
-that provides pointers to configuration, example grids and model/task-specific information and FAQ.
-
-
-## API documentation
-
-We provide some [API documentation](https://facebookresearch.github.io/audiocraft/api_docs/audiocraft/index.html) for AudioCraft.
-
-
-## FAQ
-
-#### Is the training code available?
-
-Yes! We provide the training code for [EnCodec](./docs/ENCODEC.md), [MusicGen](./docs/MUSICGEN.md),[Multi Band Diffusion](./docs/MBD.md) and [JASCO](./docs/JASCO.md).
-
-#### Where are the models stored?
-
-Hugging Face stored the model in a specific location, which can be overridden by setting the `AUDIOCRAFT_CACHE_DIR` environment variable for the AudioCraft models.
-In order to change the cache location of the other Hugging Face models, please check out the [Hugging Face Transformers documentation for the cache setup](https://huggingface.co/docs/transformers/installation#cache-setup).
-Finally, if you use a model that relies on Demucs (e.g. `musicgen-melody`) and want to change the download location for Demucs, refer to the [Torch Hub documentation](https://pytorch.org/docs/stable/hub.html#where-are-my-downloaded-models-saved).
-
-
-## License
-* The code in this repository is released under the MIT license as found in the [LICENSE file](LICENSE).
-* The models weights in this repository are released under the CC-BY-NC 4.0 license as found in the [LICENSE_weights file](LICENSE_weights).
-
-
-## Citation
-
-For the general framework of AudioCraft, please cite the following.
 ```
-@inproceedings{copet2023simple,
-    title={Simple and Controllable Music Generation},
-    author={Jade Copet and Felix Kreuk and Itai Gat and Tal Remez and David Kant and Gabriel Synnaeve and Yossi Adi and Alexandre Défossez},
-    booktitle={Thirty-seventh Conference on Neural Information Processing Systems},
-    year={2023},
-}
+PyTorch logits shape: (1, 4, 2048)
+ONNX logits shape:    (1, 4, 2048)
+Max abs difference between PyTorch and ONNX last-step logits: 0.000238
+Mean abs difference: 0.000030
+
+Logits distribution for codebook 0:
+PyTorch percentiles:
+  0th: -8.964
+  25th: -2.550
+  50th: -1.236
+  75th: 0.191
+  100th: 3.940
+ONNX percentiles:
+  0th: -8.964
+  25th: -2.550
+  50th: -1.236
+  75th: 0.191
+  100th: 3.940
+
+Last timestep analysis:
+Valid positions in last step: 1
+PyTorch top-5 tokens:
+Token 176, logit=3.940
+Token 1003, logit=3.903
+Token 1036, logit=3.889
+Token 461, logit=3.817
+Token 1021, logit=3.676
+
+ONNX top-5 tokens:
+Token 176, logit=3.940
+Token 1003, logit=3.903
+Token 1036, logit=3.889
+Token 461, logit=3.817
+Token 1021, logit=3.676
 ```
 
-When referring to a specific model, please cite as mentioned in the model specific README, e.g
-[./docs/MUSICGEN.md](./docs/MUSICGEN.md), [./docs/AUDIOGEN.md](./docs/AUDIOGEN.md), etc.
+that looks dope.
+
+But when we look at step-by-step comparisons during inference:
+
+```
+Analyzing step 0...
+  Sequence shapes match: True
+  Valid positions match: True
+  Special tokens match: True
+  Logits shape match: True
+  Max logit difference: 10.808321
+  Mean logit difference: 1.419495
+  PyTorch has NaN: False
+  ONNX has NaN: False
+  Top-k token overlap: 0/5
+
+Analyzing step 1...
+  Sequence shapes match: True
+  Valid positions match: True
+  Special tokens match: True
+  Logits shape match: True
+  Max logit difference: 0.695178
+  Mean logit difference: 0.500033
+  PyTorch has NaN: False
+  ONNX has NaN: False
+  Top-k token overlap: 2/5
+
+Analyzing step 2...
+  Sequence shapes match: True
+  Valid positions match: True
+  Special tokens match: True
+  Logits shape match: True
+  Max logit difference: 0.391212
+  Mean logit difference: 0.227879
+  PyTorch has NaN: False
+  ONNX has NaN: False
+  Top-k token overlap: 1/5
+
+Analyzing step 3...
+  Sequence shapes match: True
+  Valid positions match: True
+  Special tokens match: True
+  Logits shape match: True
+  Max logit difference: 8.896946
+  Mean logit difference: 0.539138
+  PyTorch has NaN: False
+  ONNX has NaN: False
+  Top-k token overlap: 1/5
+
+Analyzing step 4...
+  Sequence shapes match: True
+  Valid positions match: True
+  Special tokens match: True
+  Logits shape match: True
+  Max logit difference: 7.545876
+  Mean logit difference: 1.265550
+  PyTorch has NaN: False
+  ONNX has NaN: False
+  Top-k token overlap: 0/5
+```
+
+### Layer Analysis
+When we analyze the model layers, we see some interesting patterns in the transformations:
+
+```
+Layer 0:
+  Shape: torch.Size([1, 14, 1024])
+  Mean: 0.440
+  Std:  0.357
+  Min:  -1.418
+  Max:  4.523
+
+[... middle layers omitted for brevity, but show gradual changes ...]
+
+Layer 23:
+  Shape: torch.Size([1, 14, 1024])
+  Mean: 0.581
+  Std:  0.742
+  Min:  -21.428
+  Max:  13.157
+```
+
+### Tracer Warnings
+
+During the ONNX export, we get a bunch of tracer warnings. The main issues seem to be:
+- Converting tensors to Python values during tracing
+- Issues with dynamic axes for attention masks and hidden states
+- Numpy conversions that might cause trace issues
+- Problems with tensor-to-boolean conversions in various assertion checks
+
+these warnings might be okay...we see alot of them with the encodec export, too and that works out...
+
+note: a robot told me to export just the decoder part of encodec to its own onnx model. I'm not sure how necessary that was but I see transformers.js does similar things. 
+
+I literally just renamed compression_encode_decode.onnx to compression_encode.onnx. Like I said, the encodec model is doin just fine. 
+
+You'll end up with 3 onnx models:
+
+compression_encode.onnx
+compression_decode.onnx
+lm_inference.onnx
+
+another note: I see transformers.js version
+
+## The Scripts
+
+- `onnx_test.py` - Exports the encodec model (saved as compression_encode.onnx)
+- `onnx_decode_test.py` - Exports just the decoder part
+- `onnx_lm_test_2.py` - Attempts to export the lm model
+- `check_logits.py` - Compares PyTorch vs ONNX logits
+- `onnx_python_debug.py` - creates the debug_output.json and compares the pytorch/onnx model inference
+- `run_onnx_encodec.py` - Tests the ONNX compression
+- `analyze_checkpoint.py` - Gets details about state_dict.bin
+
+## Why This Is Hard
+
+The main issue is that MusicGen's language model is autoregressive - it uses its own outputs as inputs for the next step. ONNX wants a static graph, but we need something stateful. We're trying to handle the autoregressive loop at inference time instead of exporting it, but... it's not going great.
+
+The tracings show that a lot of the model's internal logic (like assertions and tensor manipulations) isn't playing nice with ONNX's tracing system. While we can get the basic forward pass to work (as shown by the initial logit comparisons), the model starts to diverge significantly when we try to use it autoregressively.
+
+## Help Wanted!
+
+If you know how to handle autoregressive models in ONNX properly, please help! I'm definitely learning as I go here.

@@ -27,3 +27,7 @@ torchtext==0.16.0
 pesq
 pystoi
 torchdiffeq
+
+# da onnx stuff
+onnx
+onnxruntime
