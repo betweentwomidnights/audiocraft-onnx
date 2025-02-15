@@ -269,8 +269,6 @@ You'll end up with 3 onnx models:
 `compression_decode.onnx`
 `lm_inference.onnx`
 
-another note: I see transformers.js version
-
 ## The Scripts
 
 - `onnx_test.py` - Exports the encodec model (saved as compression_encode.onnx)
