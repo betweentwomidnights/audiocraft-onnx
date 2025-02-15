@@ -8,6 +8,7 @@ We're trying to convert Facebook's MusicGen model (specifically using weights fr
 
 this is the function we be talkin about inside the /audiocraft/models/genmodel.py:
 
+```
 def generate_continuation(self, prompt: torch.Tensor, prompt_sample_rate: int,
                               descriptions: tp.Optional[tp.List[tp.Optional[str]]] = None,
                               progress: bool = False, return_tokens: bool = False) \
@@ -34,6 +35,7 @@ def generate_continuation(self, prompt: torch.Tensor, prompt_sample_rate: int,
         if return_tokens:
             return self.generate_audio(tokens), tokens
         return self.generate_audio(tokens)
+        ```
 
 our backend at https://github.com/betweentwomidnights/gary-backend-combined uses this function alot. It takes an input audio prompt. If we do figure this out, our applications won't need a backend in the clouds anymore.
 
