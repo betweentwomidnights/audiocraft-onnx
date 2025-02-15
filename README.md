@@ -41,6 +41,7 @@ def generate_continuation(self, prompt: torch.Tensor, prompt_sample_rate: int,
 our backend at https://github.com/betweentwomidnights/gary-backend-combined uses this function alot. It takes an input audio prompt. If we do figure this out, our applications won't need a backend in the clouds anymore.
 
 The good news: encoding and decoding works.
+
 The bad news: The language model part is a hellscape.
 
 ## Current Status
@@ -264,9 +265,9 @@ I literally just renamed compression_encode_decode.onnx to compression_encode.on
 
 You'll end up with 3 onnx models:
 
-compression_encode.onnx
-compression_decode.onnx
-lm_inference.onnx
+`compression_encode.onnx`
+`compression_decode.onnx`
+`lm_inference.onnx`
 
 another note: I see transformers.js version
 
